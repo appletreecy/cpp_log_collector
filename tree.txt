@@ -1,0 +1,16 @@
+cpp-log-collector/
+├── CMakeLists.txt
+├── src/
+│   ├── main.cpp
+│   ├── server/
+│   │   ├── UdpServer.cpp
+│   │   └── UdpServer.h
+│   ├── parser/
+│   │   ├── LogParser.cpp
+│   │   └── LogParser.h
+│   ├── sink/
+│   │   ├── FileSink.cpp
+│   │   └── FileSink.h
+│   └── common/
+│       └── Logger.h
+└── README.md
