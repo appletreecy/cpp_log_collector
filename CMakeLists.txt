@@ -7,6 +7,7 @@ add_executable(log_collector
         src/main.cpp
         src/server/UdpServer.cpp
         src/sink/FileSink.cpp
+        src/common/Signal.cpp
 )
 
 target_include_directories(log_collector PRIVATE src)
