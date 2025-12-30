@@ -3,15 +3,19 @@
 
 class Signal {
 public:
-    // install SIGINT/SIGTERM handlers;
     static void install();
-
-    // check if shutdown requested
     static bool stopRequested();
 
-private:
-    static std::atomic<bool> stop_;
+    // poll/select watches this (read end)
+    static int wakeFd();
 
-    // 👇 allow the C-style signal handler to set the flag
-    friend void handleSignal(int);
+    // used by handler to write 1 byte (write end)
+    static int wakeWriteFd();
+
+    // called from signal handler (public so handler doesn't touch private members)
+    static void requestStopFromSignal();
+
+private:
+    static std::atomic_bool stop_;
+    static int pipefd_[2]; // [0] read, [1] write
 };
