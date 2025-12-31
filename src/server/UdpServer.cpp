@@ -1,18 +1,20 @@
-#include "UdpServer.h"
+#include "server/UdpServer.h"
 #include "common/Signal.h"
-#include <unistd.h>
-#include <cstring>
-#include <iostream>
-#include <stdexcept>
-#include <cerrno>
-#include <poll.h>
 
-UdpServer::UdpServer(int port, std::string outPath) : sockfd(-1), sink_(outPath){
+#include <unistd.h>
+#include <poll.h>
+#include <cstring>
+#include <cerrno>
+#include <cstdint>
+#include <stdexcept>
+
+UdpServer::UdpServer(int port, BlockingQueue<std::string>& q)
+    : sockfd(-1), q_(q)
+{
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) throw std::runtime_error("socket() failed");
 
     std::memset(&addr, 0, sizeof(addr));
-
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(port);
@@ -36,28 +38,29 @@ void UdpServer::run() {
         int rc = poll(fds, 2, -1);
         if (rc < 0) {
             if (errno == EINTR) continue;
-            continue; // could log error later
+            continue;
         }
 
-        // If signal was requested OR wake pipe readable, exit immediately
+        // signal wakeup => drain & exit
         if (Signal::stopRequested() || (fds[1].revents & POLLIN)) {
-            // Drain wake pipe (important so it doesn't keep triggering)
-            uint8_t tmp[256];
+            std::uint8_t tmp[256];
             while (true) {
                 ssize_t n = read(fds[1].fd, tmp, sizeof(tmp));
                 if (n <= 0) break;
             }
-
-            sink_.writeLine("Shutting down (self pipe wakeup)...");
             close(sockfd);
-            return; // ✅ ensures we exit run() exactly once
+            return;
         }
 
         if (fds[0].revents & POLLIN) {
             ssize_t len = recvfrom(sockfd, buffer, sizeof(buffer) - 1, 0, nullptr, nullptr);
-            if (len > 0) {
-                buffer[len] = '\0';
-                sink_.writeLine(buffer);
+            if (len <= 0) continue;
+
+            buffer[len] = '\0';
+
+            // enqueue (fast). If queue full, drop and count.
+            if (!q_.tryPush(std::string(buffer))) {
+                ++dropped_;
             }
         }
     }

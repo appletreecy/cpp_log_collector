@@ -1,16 +1,21 @@
 #pragma once
 #include <netinet/in.h>
 #include <string>
-#include <sink/FileSink.h>
+#include <cstdint>
+
+#include "common/BlockingQueue.h"
 
 
 class UdpServer{
 public:
-    explicit UdpServer(int port, std::string outPath);
+    UdpServer(int port, BlockingQueue<std::string>& q);
     void run();
+
+    std::uint64_t dropped() const {return dropped_;}
 
 private:
     int sockfd;
     sockaddr_in addr{};
-    FileSink sink_;
+    BlockingQueue<std::string>& q_;
+    std::uint64_t dropped_{0};
 };
