@@ -1,9 +1,9 @@
 #pragma once
 #include <condition_variable>
 #include <cstddef>
+#include <chrono>
 #include <deque>
 #include <mutex>
-#include <optional>
 #include <vector>
 
 template <typename T>
@@ -23,23 +23,25 @@ public:
         return true;
     }
 
-    // Pop up to maxItems. Blocks until:
-    // - there is at least one item, OR
-    // - closed and empty (returns empty vector)
+    // Blocking batch pop (no timeout): waits until item available or closed+empty.
     std::vector<T> popBatch(std::size_t maxItems) {
         std::unique_lock<std::mutex> lk(mu_);
         cv_.wait(lk, [&] { return closed_ || !q_.empty(); });
+        return popLocked_(maxItems);
+    }
 
-        std::vector<T> out;
-        if (q_.empty()) return out; // closed + empty
-
-        const std::size_t n = (q_.size() < maxItems) ? q_.size() : maxItems;
-        out.reserve(n);
-        for (std::size_t i = 0; i < n; ++i) {
-            out.push_back(std::move(q_.front()));
-            q_.pop_front();
-        }
-        return out;
+    // Timed batch pop: waits up to 'timeout' for at least one item.
+    // Returns:
+    // - some items if available
+    // - empty if timeout and no items
+    // - empty if closed and empty
+    template <class Rep, class Period>
+    std::vector<T> popBatchFor(std::size_t maxItems,
+                               const std::chrono::duration<Rep, Period>& timeout) {
+        std::unique_lock<std::mutex> lk(mu_);
+        cv_.wait_for(lk, timeout, [&] { return closed_ || !q_.empty(); });
+        // Whether we woke due to timeout or notify, pop what we have (could be empty).
+        return popLocked_(maxItems);
     }
 
     void close() {
@@ -56,6 +58,20 @@ public:
     std::size_t size() const {
         std::lock_guard<std::mutex> lk(mu_);
         return q_.size();
+    }
+
+private:
+    std::vector<T> popLocked_(std::size_t maxItems) {
+        std::vector<T> out;
+        if (q_.empty()) return out;
+
+        const std::size_t n = (q_.size() < maxItems) ? q_.size() : maxItems;
+        out.reserve(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            out.push_back(std::move(q_.front()));
+            q_.pop_front();
+        }
+        return out;
     }
 
 private:
