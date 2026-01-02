@@ -8,8 +8,8 @@
 #include <cstdint>
 #include <stdexcept>
 
-UdpServer::UdpServer(int port, BlockingQueue<std::string>& q)
-    : sockfd(-1), q_(q)
+UdpServer::UdpServer(int port, BlockingQueue<std::string>& q, Stats& stats)
+    : sockfd(-1), q_(q), stats_(stats)
 {
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) throw std::runtime_error("socket() failed");
@@ -57,10 +57,11 @@ void UdpServer::run() {
             if (len <= 0) continue;
 
             buffer[len] = '\0';
+            stats_.received.fetch_add(1, std::memory_order_relaxed);
 
             // enqueue (fast). If queue full, drop and count.
             if (!q_.tryPush(std::string(buffer))) {
-                ++dropped_;
+                stats_.dropped.fetch_add(1, std::memory_order_relaxed);
             }
         }
     }

@@ -1,21 +1,20 @@
 #pragma once
 #include <netinet/in.h>
 #include <string>
-#include <cstdint>
 
 #include "common/BlockingQueue.h"
+#include "common/Stats.h"
 
 
 class UdpServer{
 public:
-    UdpServer(int port, BlockingQueue<std::string>& q);
+    UdpServer(int port, BlockingQueue<std::string>& q, Stats& stats);
     void run();
 
-    std::uint64_t dropped() const {return dropped_;}
 
 private:
     int sockfd;
     sockaddr_in addr{};
     BlockingQueue<std::string>& q_;
-    std::uint64_t dropped_{0};
+    Stats& stats_;
 };
