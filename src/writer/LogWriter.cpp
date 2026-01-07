@@ -3,9 +3,15 @@
 LogWriter::LogWriter(BlockingQueue<std::string>& q,
                      Stats& stats,
                      std::string outPath,
+                     std::uint64_t rotateMaxBytes,
+                     int rotateMaxFiles,
                      std::size_t batchSize,
                      std::chrono::milliseconds flushEvery)
-    : q_(q), stats_(stats), sink_(outPath), batchSize_(batchSize), flushEvery_(flushEvery) {}
+    : q_(q),
+      stats_(stats),
+      sink_(std::move(outPath), rotateMaxBytes, rotateMaxFiles),
+      batchSize_(batchSize),
+      flushEvery_(flushEvery) {}
 
 void LogWriter::start() {
     running_.store(true, std::memory_order_relaxed);

@@ -9,6 +9,8 @@ add_executable(log_collector
         src/sink/FileSink.cpp
         src/common/Signal.cpp
         src/writer/LogWriter.cpp
+        src/metrics/MetricsServer.cpp
+        src/sink/RotatingFileSink.cpp
 )
 
 target_include_directories(log_collector PRIVATE src)
