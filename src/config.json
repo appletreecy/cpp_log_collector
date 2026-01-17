@@ -1,0 +1,11 @@
+{
+  "udp_port": 9000,
+  "metrics_port": 9100,
+  "bind_ip": "127.0.0.1",
+  "out": "collector.log",
+  "queue": 10000,
+  "batch": 256,
+  "flush_ms": 50,
+  "rotate_mb": 5,
+  "rotate_files": 5
+}

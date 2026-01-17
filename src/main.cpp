@@ -9,7 +9,9 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -32,6 +34,7 @@ static void printUsage(const char* prog) {
     std::cerr
         << "Usage: " << prog << " [options]\n"
         << "Options:\n"
+        << "  --config <file.json>\n"
         << "  --udp-port <int>         (default 9000)\n"
         << "  --metrics-port <int>     (default 9100)\n"
         << "  --bind-ip <ip>           (default 127.0.0.1)\n"
@@ -68,7 +71,143 @@ static bool parseU64(const std::string& s, std::uint64_t& out) {
     return true;
 }
 
+// --------- tiny JSON (flat) parser ---------
+// Supports: {"k":123, "x":"str", ...} with optional whitespace.
+// No nesting, no escapes, no arrays.
+static std::string readAll(const std::string& path) {
+    std::ifstream in(path);
+    if (!in.is_open()) throw std::runtime_error("Failed to open config: " + path);
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
+static void skipWs(const std::string& s, std::size_t& i) {
+    while (i < s.size() && (s[i] == ' ' || s[i] == '\n' || s[i] == '\r' || s[i] == '\t')) ++i;
+}
+
+static bool consume(const std::string& s, std::size_t& i, char c) {
+    skipWs(s, i);
+    if (i < s.size() && s[i] == c) { ++i; return true; }
+    return false;
+}
+
+static std::string parseString(const std::string& s, std::size_t& i) {
+    skipWs(s, i);
+    if (i >= s.size() || s[i] != '"') throw std::runtime_error("Expected '\"' in config");
+    ++i;
+    std::string out;
+    while (i < s.size() && s[i] != '"') {
+        // no escape handling (by design)
+        out.push_back(s[i++]);
+    }
+    if (i >= s.size()) throw std::runtime_error("Unterminated string in config");
+    ++i;
+    return out;
+}
+
+static std::string parseNumberToken(const std::string& s, std::size_t& i) {
+    skipWs(s, i);
+    std::size_t start = i;
+    if (i < s.size() && (s[i] == '-' || s[i] == '+')) ++i;
+    while (i < s.size() && (s[i] >= '0' && s[i] <= '9')) ++i;
+    if (start == i) throw std::runtime_error("Expected number in config");
+    return s.substr(start, i - start);
+}
+
+static std::unordered_map<std::string, std::string> parseFlatJson(const std::string& text) {
+    std::unordered_map<std::string, std::string> kv;
+    std::size_t i = 0;
+
+    if (!consume(text, i, '{')) throw std::runtime_error("Config must start with '{'");
+
+    skipWs(text, i);
+    if (consume(text, i, '}')) return kv;
+
+    while (true) {
+        std::string key = parseString(text, i);
+        if (!consume(text, i, ':')) throw std::runtime_error("Expected ':' after key in config");
+
+        skipWs(text, i);
+        std::string val;
+        if (i < text.size() && text[i] == '"') {
+            val = parseString(text, i);
+        } else {
+            val = parseNumberToken(text, i);
+        }
+
+        kv[key] = val;
+
+        skipWs(text, i);
+        if (consume(text, i, '}')) break;
+        if (!consume(text, i, ',')) throw std::runtime_error("Expected ',' between items in config");
+    }
+
+    return kv;
+}
+
+static void applyConfigKV(const std::unordered_map<std::string, std::string>& kv, Config& cfg) {
+    auto get = [&](const char* k) -> const std::string* {
+        auto it = kv.find(k);
+        if (it == kv.end()) return nullptr;
+        return &it->second;
+    };
+
+    if (auto v = get("udp_port")) {
+        int x; if (!parseInt(*v, x) || x <= 0) throw std::runtime_error("Bad udp_port");
+        cfg.udpPort = x;
+    }
+    if (auto v = get("metrics_port")) {
+        int x; if (!parseInt(*v, x) || x <= 0) throw std::runtime_error("Bad metrics_port");
+        cfg.metricsPort = x;
+    }
+    if (auto v = get("bind_ip")) cfg.bindIp = *v;
+    if (auto v = get("out")) cfg.outPath = *v;
+
+    if (auto v = get("queue")) {
+        std::size_t x; if (!parseSizeT(*v, x) || x < 1) throw std::runtime_error("Bad queue");
+        cfg.queueCap = x;
+    }
+    if (auto v = get("batch")) {
+        std::size_t x; if (!parseSizeT(*v, x) || x < 1) throw std::runtime_error("Bad batch");
+        cfg.batchSize = x;
+    }
+    if (auto v = get("flush_ms")) {
+        int x; if (!parseInt(*v, x) || x < 1) throw std::runtime_error("Bad flush_ms");
+        cfg.flushMs = x;
+    }
+    if (auto v = get("rotate_mb")) {
+        std::uint64_t x; if (!parseU64(*v, x) || x < 1) throw std::runtime_error("Bad rotate_mb");
+        cfg.rotateMb = x;
+    }
+    if (auto v = get("rotate_files")) {
+        int x; if (!parseInt(*v, x) || x < 1) throw std::runtime_error("Bad rotate_files");
+        cfg.rotateFiles = x;
+    }
+}
+
+// CLI overrides (same as Phase 4.1), plus --config to load file first.
 static bool parseArgs(int argc, char** argv, Config& cfg) {
+    // First pass: find --config
+    std::string configPath;
+    for (int i = 1; i < argc; ++i) {
+        std::string key = argv[i];
+        if (key == "--config") {
+            if (i + 1 >= argc) { std::cerr << "Missing value for --config\n"; return false; }
+            configPath = argv[i + 1];
+            break;
+        }
+        if (key == "--help" || key == "-h") return false;
+    }
+
+    // Load config file if provided
+    if (!configPath.empty()) {
+        auto text = readAll(configPath);
+        auto kv = parseFlatJson(text);
+        applyConfigKV(kv, cfg);
+    }
+
+    // Second pass: apply CLI overrides
     for (int i = 1; i < argc; ++i) {
         std::string key = argv[i];
 
@@ -83,6 +222,9 @@ static bool parseArgs(int argc, char** argv, Config& cfg) {
 
         if (key == "--help" || key == "-h") {
             return false;
+        } else if (key == "--config") {
+            std::string v; if (!needValue(v)) return false;
+            // already loaded above; ignore here
         } else if (key == "--udp-port") {
             std::string v; if (!needValue(v)) return false;
             if (!parseInt(v, cfg.udpPort) || cfg.udpPort <= 0) { std::cerr << "Bad --udp-port\n"; return false; }
@@ -115,6 +257,7 @@ static bool parseArgs(int argc, char** argv, Config& cfg) {
             return false;
         }
     }
+
     return true;
 }
 
@@ -143,7 +286,7 @@ int main(int argc, char** argv) {
         metrics.start();
 
         UdpServer server(cfg.udpPort, queue, stats);
-        server.run(); // blocks until SIGTERM/SIGINT
+        server.run();
 
         writer.stop();
         metrics.stop();
@@ -157,5 +300,6 @@ int main(int argc, char** argv) {
         std::cerr << "Fatal: " << e.what() << "\n";
         return 1;
     }
+
     return 0;
 }
